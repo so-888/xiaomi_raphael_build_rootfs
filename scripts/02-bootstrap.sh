@@ -44,4 +44,7 @@ else
     exit 1
 fi
 
+    cd ./boot
+    cp -R . ../rootdir/boot
+    cd ../
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [02] ✅ 基础系统安装完成"

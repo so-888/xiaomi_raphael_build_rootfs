@@ -128,10 +128,6 @@ chroot rootdir sh -c "apt-get remove -y --allow-remove-essential \
 		/tmp/qcom-debs/tqftpserv_*_arm64.deb"
 	chroot rootdir sh -c '
 		export DEBIAN_FRONTEND=noninteractive
-		for p in libqmi-glib5 libqmi-utils libqmi-proxy modemmanager libmm-glib0; do
-			dpkg --remove --auto-deconfigure "$p" "${p}:arm64" 2>/dev/null || true
-		done
-		apt-get remove -y --allow-remove-essential modemmanager libqmi-utils libqmi-proxy libqmi-glib5 libmm-glib0 2>/dev/null || true
 		dpkg -i --auto-deconfigure /tmp/qcom-debs/modemmanager-qrtr-sm8150_*_jammy_arm64.deb
 		apt-get install -f -y
 	'
@@ -143,7 +139,7 @@ chroot rootdir sh -c "apt-get remove -y --allow-remove-essential \
 
 	# qrtr-ns 在 lib/systemd/system；rmtfs/pd-mapper 在 usr/lib/systemd/system
 	chroot rootdir systemctl enable qrtr-ns.service
-	chroot rootdir systemctl enable rmtfs-dir.service pd-mapper.service tqftpserv.service modemmanager.service
+	chroot rootdir systemctl enable rmtfs-dir.service pd-mapper.service tqftpserv.service
 	# 避免与 rmtfs 主服务竞态（与 Debian 打包策略一致）
 	chroot rootdir systemctl disable rmtfs.service 2>/dev/null || true
 	chroot rootdir systemctl mask rmtfs.service 2>/dev/null || true

@@ -258,7 +258,6 @@ install_dependencies() {
 # ================================================================
 check_local_kernel() {
     local kernel_dir="xiaomi-raphael-debs_${KERNEL_VERSION}"
-    local boot_img="xiaomi-k20pro-boot.img"
 
     header "检查本地内核文件..."
 
@@ -286,21 +285,12 @@ check_local_kernel() {
         fi
     done
 
-    if [ ! -f "${boot_img}.template" ]; then
-        error "缺少 ${boot_img}.template，請放入項目根目錄"
-        missing=true
-    else
-        cp -f "${boot_img}.template" "${boot_img}"
-        ok "找到 ${boot_img}.template"
-    fi
-
     if [ "$missing" = true ]; then
         exit 1
     fi
 
     ok "所有文件已就绪"
     ls -lh "${kernel_dir}/"
-    ls -lh "${boot_img}"
 }
 
 # ================================================================

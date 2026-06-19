@@ -77,11 +77,6 @@ else
 fi
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] ========================================== 🎉"
 
-if [ ! -f "$BOOT_IMG" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] ❌ 错误: $BOOT_IMG 不存在"
-    exit 1
-fi
-
 if [ ! -d "$KERNEL_DEBS_DIR" ]; then
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] ❌ 错误: $KERNEL_DEBS_DIR 目录不存在"
     exit 1
