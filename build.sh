@@ -97,6 +97,7 @@ echo "[$(date +'%Y-%m-%d %H:%M:%S')] ========================================== 
 "$SCRIPT_DIR/scripts/08b-config-plymouth.sh"
 "$SCRIPT_DIR/scripts/09-install-kernel.sh"
 "$SCRIPT_DIR/scripts/10-config-ncm.sh"
+"$SCRIPT_DIR/scripts/10b-config-modem.sh"
 "$SCRIPT_DIR/scripts/11-config-fstab.sh"
 "$SCRIPT_DIR/scripts/12-create-users.sh"
 "$SCRIPT_DIR/scripts/13-config-power.sh"
