@@ -1,0 +1,83 @@
+// Raphael vendor boot logo - light-sweep animation (plymouth script module).
+//
+// Plays a pre-rendered sequence (anim-1.png .. anim-N.png) where a specular
+// highlight sweeps diagonally across the vendor logo, then loops. No spinner.
+//
+// Frames are logo-sized only (see render-anim.py, LOGO_WIDTH). They are placed
+// 1:1 pixels centered on a black background. Do NOT bake full-screen frames
+// (1080x2340) or plymouth will scale/crop them on non-phone displays.
+
+// --- Solid black background (covers the ABL splash) ---
+Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
+Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
+
+screen_width  = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+// The frames are a FULL-SCREEN composition (anim-*.png, panel aspect). Scale
+// each one to exactly fill the actual screen plymouth reports and anchor at
+// (0,0). This preserves the logo's designed position and size, so the ABL ->
+// plymouth handover has no shift and no resize.
+num_frames = 42;
+i = 1;
+while (i <= num_frames) {
+    frame[i] = Image("anim-" + i + ".png").Scale(screen_width, screen_height);
+    i++;
+}
+
+logo.sprite = Sprite();
+logo.sprite.SetPosition(0, 0, 1);
+logo.sprite.SetImage(frame[1]);
+
+// --- Playback: advance one frame every FRAME_HOLD refresh ticks ---
+// plymouth refreshes ~50x/sec, so FRAME_HOLD=3 is ~16 fps (smaller = faster).
+FRAME_HOLD = 1;
+cur = 1;
+sub = 0;
+fun refresh_callback() {
+    sub++;
+    if (sub >= FRAME_HOLD) {
+        sub = 0;
+        cur++;
+        if (cur > num_frames)
+            cur = 1;
+        logo.sprite.SetImage(frame[cur]);
+    }
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+// --- Status messages (fsck progress, systemd jobs, etc.) ---
+message.sprite = Sprite();
+fun message_callback(text) {
+    message.image = Image.Text(text, 0.7, 0.7, 0.7);
+    message.sprite.SetImage(message.image);
+    message.sprite.SetPosition(
+        screen_width / 2 - message.image.GetWidth() / 2,
+        screen_height * 0.66,
+        10);
+}
+Plymouth.SetMessageFunction(message_callback);
+
+// --- Disk unlock (LUKS) password prompt ---
+prompt.sprite = Sprite();
+fun display_password_callback(prompt_text, bullets) {
+    line = prompt_text;
+    k = 0;
+    while (k < bullets) {
+        line += " *";
+        k++;
+    }
+    prompt.image = Image.Text(line, 1, 1, 1);
+    prompt.sprite.SetImage(prompt.image);
+    prompt.sprite.SetPosition(
+        screen_width / 2 - prompt.image.GetWidth() / 2,
+        screen_height * 0.72,
+        10);
+}
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+// Clear the password prompt when returning to the normal display.
+fun display_normal_callback() {
+    prompt.sprite.SetImage(Image.Text("", 0, 0, 0));
+}
+Plymouth.SetDisplayNormalFunction(display_normal_callback);

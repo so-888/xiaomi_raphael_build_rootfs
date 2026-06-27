@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=BGRT
+Description=Raphael vendor boot logo with a light-sweep animation
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/bgrt
+ScriptFile=/usr/share/plymouth/themes/bgrt/bgrt.script

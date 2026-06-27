@@ -62,7 +62,13 @@ else
     DESKTOP_PACKAGES=""
 fi
 
-ALL_PACKAGES="$BASE_PACKAGES $DEVICE_PACKAGES $DESKTOP_PACKAGES"
+# Plymouth provides the vendor boot-logo animation (script.so plugin, drm /
+# frame-buffer renderers and the initramfs hook). Installed for every variant
+# (incl. server) so the splash works; the theme itself is set up in
+# 08b-config-plymouth.sh before the initramfs is generated in 09.
+PLYMOUTH_PACKAGES="plymouth plymouth-themes plymouth-label"
+
+ALL_PACKAGES="$BASE_PACKAGES $DEVICE_PACKAGES $DESKTOP_PACKAGES $PLYMOUTH_PACKAGES"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 基础包: $(echo "$BASE_PACKAGES" | tr ' ' ', ')"
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 设备包: $(echo "$DEVICE_PACKAGES" | tr ' ' ', ')"
@@ -139,7 +145,8 @@ chroot rootdir sh -c "apt-get remove -y --allow-remove-essential \
 
 	# qrtr-ns 在 lib/systemd/system；rmtfs/pd-mapper 在 usr/lib/systemd/system
 	chroot rootdir systemctl enable qrtr-ns.service
-	chroot rootdir systemctl enable rmtfs-dir.service pd-mapper.service tqftpserv.service
+	#chroot rootdir systemctl enable rmtfs-dir.service pd-mapper.service tqftpserv.service
+	chroot rootdir systemctl enable rmtfs.service pd-mapper.service tqftpserv.service
 	# 避免与 rmtfs 主服务竞态（与 Debian 打包策略一致）
 	chroot rootdir systemctl disable rmtfs.service 2>/dev/null || true
 	chroot rootdir systemctl mask rmtfs.service 2>/dev/null || true
