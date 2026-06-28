@@ -95,6 +95,7 @@ install_qcom_local_debs() {
 		protection-domain-mapper_*_arm64.deb
 		tqftpserv_*_arm64.deb
 		audioreach-topology_*_all.deb
+		modemmanager-qrtr-sm8150_*_jammy_arm64.deb
 	)
 
 	if [ ! -d "$deb_dir" ]; then
@@ -113,19 +114,29 @@ install_qcom_local_debs() {
 	if [ "$missing" -ne 0 ]; then
 		exit 1
 	fi
+
+	local mm_deb
+	mm_deb="$(ls -1 "$deb_dir"/modemmanager-qrtr-sm8150_*_jammy_arm64.deb 2>/dev/null | sort -V | tail -1)"
+	if [ -z "$mm_deb" ]; then
+		echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ 缺少: $deb_dir/modemmanager-qrtr-sm8150_*_jammy_arm64.deb" >&2
+		echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]    请先运行: $SCRIPT_DIR/build-modemmanager-deb.sh" >&2
+		exit 1
+	fi
+	echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ ModemManager: $(basename "$mm_deb") (QMAPv4 patch, 禁用 v5)"
+
 chroot rootdir sh -c "apt-get remove -y --allow-remove-essential \
 	modemmanager libqmi-utils libqmi-proxy libqmi-glib5"
 	echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装本地 Qualcomm deb: $deb_dir"
 	mkdir -p rootdir/tmp/qcom-debs
-	# 按依赖顺序：libqrtr1 -> tools/rmtfs/pd-mapper/tqftpserv -> topology
+	# 按依赖顺序：libqrtr1 -> tools/rmtfs/pd-mapper/tqftpserv -> topology -> MM
 	cp "$deb_dir"/libqrtr1_*_arm64.deb rootdir/tmp/qcom-debs/
 	cp "$deb_dir"/qrtr-tools_*_arm64.deb \
 		"$deb_dir"/rmtfs_*_arm64.deb \
 		"$deb_dir"/protection-domain-mapper_*_arm64.deb \
 		"$deb_dir"/tqftpserv_*_arm64.deb \
 		"$deb_dir"/audioreach-topology_*_all.deb \
-		"$deb_dir"/modemmanager-qrtr-sm8150_*_jammy_arm64.deb \
 		rootdir/tmp/qcom-debs/
+	cp "$mm_deb" rootdir/tmp/qcom-debs/
 
 	chroot rootdir sh -c "dpkg -i /tmp/qcom-debs/libqrtr1_*_arm64.deb"
 	chroot rootdir sh -c "dpkg -i /tmp/qcom-debs/qrtr-tools_*_arm64.deb \
@@ -134,7 +145,7 @@ chroot rootdir sh -c "apt-get remove -y --allow-remove-essential \
 		/tmp/qcom-debs/tqftpserv_*_arm64.deb"
 	chroot rootdir sh -c '
 		export DEBIAN_FRONTEND=noninteractive
-		dpkg -i --auto-deconfigure /tmp/qcom-debs/modemmanager-qrtr-sm8150_*_jammy_arm64.deb
+		dpkg -i --auto-deconfigure /tmp/qcom-debs/modemmanager-qrtr-sm8150_*.deb
 		apt-get install -f -y
 	'
 	chroot rootdir sh -c "dpkg -i /tmp/qcom-debs/audioreach-topology_*_all.deb"

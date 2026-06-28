@@ -14,6 +14,9 @@ set -e
 # 注：不再安装 raphael-modem-offline（00161 固件 + IPA 补丁已解决 RF/数据面崩溃，
 #     该服务会把 RF 永久锁 offline 导致无法注册）。
 #     内核 IPA 修复在 patchs/raphael.patch；00161 固件在 firmware-xiaomi-raphael.deb。
+#     移动数据需 qrtr8+ ModemManager（QMAPv4 patch，见 06 安装 + patches/modemmanager/）。
+#   5) NetworkManager + systemd-resolved DNS —— resolv.conf 走 stub，GSM 连上后
+#      自动使用运营商 DNS（勿写死 1.1.1.1，否则 ping 域名失败）。
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b] 📡 配置基带 modem 服务 + 崩溃隔离"
 
@@ -201,6 +204,27 @@ cat > rootdir/etc/udev/rules.d/99-raphael-modem-norecover.rules << 'EOF'
 # RAPHAEL-MODEM-STATUS.md 3.1A. Remove once RF (A-fix) makes modem stable.
 SUBSYSTEM=="remoteproc", ACTION=="add", ATTR{name}=="modem", ATTR{recovery}="disabled"
 EOF
+
+# ---------------------------------------------------------------------------
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b]   └─ DNS: systemd-resolved + NM (GSM 运营商 DNS)"
+install -d rootdir/etc/NetworkManager/conf.d
+install -d rootdir/etc/systemd/resolved.conf.d
+
+cat > rootdir/etc/NetworkManager/conf.d/raphael-dns.conf << 'EOF'
+[main]
+# Push per-link DNS (incl. GSM bearer) into systemd-resolved.
+dns=systemd-resolved
+systemd-resolved=true
+EOF
+
+cat > rootdir/etc/systemd/resolved.conf.d/raphael.conf << 'EOF'
+[Resolve]
+# Fallback when no interface provides DNS (e.g. USB debug only).
+FallbackDNS=114.114.114.114 223.5.5.5
+DNSStubListener=yes
+EOF
+
+chroot rootdir systemctl enable systemd-resolved.service
 
 # ---------------------------------------------------------------------------
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b]   └─ 启用服务"

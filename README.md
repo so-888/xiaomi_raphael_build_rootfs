@@ -20,6 +20,8 @@
 
 - 网络：2.4G/5G 双频 Wi-Fi、USB NCM 网络
 
+- **蜂窝/基带**：SIM 卡识别、网络注册、**移动数据上网**（IPv4/IPv6）；开机插卡不再死机（崩溃隔离 + 匹配固件）
+
 - 外设：蓝牙（文件传输/音频输出）、USB SSH/OTG 功能、触摸屏、手电筒（支持亮度调节）
 
 - 基础硬件：屏幕显示、电池检测、实时时钟、GPU 渲染、FDE 加密
@@ -98,6 +100,8 @@
 
 - 内置 SSH 服务，支持 root / 普通用户远程登录
 
+- **蜂窝基带开箱可用**：预装匹配的 modem 固件（00161）、内核 IPA 数据面修复、SIM 开机自动初始化、QRTR 版 ModemManager（QMAPv4，移动数据可用）；DNS 随移动数据自动使用运营商 DNS
+
 - 支持**一键内核更新脚本**，可在线升级定制内核
 
 - 默认账号密码：
@@ -122,6 +126,26 @@
 - 开机 15 秒自动熄屏，降低设备功耗
 
 - 自定义快捷命令：`leijun` 关闭屏幕、`jinfan` 点亮屏幕
+
+## 📶 移动数据 / 蜂窝网络使用
+
+镜像已固化基带全套修复，刷机后插卡即可注册网络。出于功耗与误拨考虑，**移动数据默认不自动连接**，需手动开启：
+
+```Plain Text
+# 关闭 Wi-Fi（可选，确保走蜂窝）
+sudo nmcli radio wifi off
+
+# 连接移动数据（连接名以运营商为准，可用 nmcli connection show 查看）
+sudo nmcli connection up CTNET
+
+# 验证
+ping -4 -c 3 www.baidu.com
+```
+
+> **说明**：
+> - DNS 由 NetworkManager + systemd-resolved 按链路自动下发，连上后无需手动改 `resolv.conf`。
+> - 若希望开机自动联网，可执行 `sudo nmcli connection modify <连接名> connection.autoconnect yes`。
+> - 基带固化细节见 `基带测试/RAPHAEL-MODEM-STATUS.md`。
 
 ## ⬆️ 内核更新教程（只做内核调试用，非必要无需更新）
 
@@ -176,7 +200,9 @@ fastboot reboot
 
 ## ❓ 常见问题 FAQ
 
-- 什么破玩意儿，开机就卡死了？？？（请拔掉sim卡）
+- **开机卡死 / 插卡死机**：已修复。匹配固件（00161）+ 内核 IPA 数据面修复 + modem 崩溃隔离后，插卡开机不再死机。若仍异常，请确认刷的是最新镜像。
+
+- **移动数据连上但 ping 域名失败（IP 能通）**：DNS 问题。新镜像已用 systemd-resolved 按链路下发运营商 DNS；旧镜像可手动 `sudo nmcli connection up <连接名>` 重连或检查 `/etc/resolv.conf`。
 
 - **Windows 无法连接设备 CDC NCM 驱动**：参考解决方案视频[BV1tW4y1A79V](https://www.bilibili.com/video/BV1tW4y1A79V/)
 
