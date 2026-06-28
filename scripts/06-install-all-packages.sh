@@ -147,7 +147,7 @@ chroot rootdir sh -c "apt-get remove -y --allow-remove-essential \
 	chroot rootdir systemctl enable qrtr-ns.service
 	chroot rootdir systemctl disable rmtfs-dir.service 2>/dev/null || true
 	chroot rootdir systemctl mask rmtfs-dir.service 2>/dev/null || true
-	chroot rootdir systemctl umask rmtfs.service 2>/dev/null || true
+	chroot rootdir systemctl unmask rmtfs.service 2>/dev/null || true
 	#chroot rootdir systemctl enable rmtfs-dir.service pd-mapper.service tqftpserv.service
 	chroot rootdir systemctl enable rmtfs.service pd-mapper.service tqftpserv.service
 	# 避免与 rmtfs 主服务竞态（与 Debian 打包策略一致）
