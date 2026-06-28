@@ -1,113 +1,25 @@
 #!/bin/bash
 set -e
 
-# 固化基带（modem）运行态修复，等价于 基带测试/mm/mm/raphael-deploy-modem-services.sh
-# 在镜像里铺设的内容（再加 udev 崩溃隔离规则）：
+# 固化基带（modem）运行态修复：
 #
-#   1) raphael-modem-offline(.sh+.service) —— 开机先把 modem RF 置 offline，避免在
-#      sim-init 绑定 SIM 之前 modem 自动 online 触发早期问题；由 MM 的 drop-in
-#      Requires= 拉起（本身不单独 enable）。
-#   2) raphael-sim-init(.sh+.service) —— 把物理 SIM 卡槽映射到逻辑槽并在 MM 之前
+#   1) raphael-sim-init(.sh+.service) —— 把物理 SIM 卡槽映射到逻辑槽并在 MM 之前
 #      绑定 USIM 供应会话，解决"无 SIM"。enable。
-#   3) raphael-no-mobile-data(.sh+.service) —— 开机关闭 GSM autoconnect，避免误拨
-#      移动数据（数据面安全默认）。enable。
-#   4) ModemManager.service.d/raphael.conf —— MM 在 modem-offline / sim-init 之后启动。
-#   5) 99-raphael-modem-norecover.rules —— 禁用 modem remoteproc 就地恢复，modem
+#   2) raphael-no-mobile-data(.sh+.service) —— 开机关闭 GSM autoconnect，避免开机
+#      误拨移动数据。enable。
+#   3) ModemManager.service.d/raphael.conf —— MM 在 sim-init 之后启动。
+#   4) 99-raphael-modem-norecover.rules —— 禁用 modem remoteproc 就地恢复，modem
 #      崩溃时保持 "crashed" 而不拖垮整机（B 类安全网）。
 #
-# 注：内核 IPA 数据面崩溃修复（ipa_data-v4.1 通道/端点号修正 + gsi 防御）已固化在
-#     kernel 构建工具 patchs/raphael.patch，随 linux-image deb 进入镜像（脚本 09）。
-#     00161 modem 固件已固化在 firmware-xiaomi-raphael.deb（脚本 09）。
+# 注：不再安装 raphael-modem-offline（00161 固件 + IPA 补丁已解决 RF/数据面崩溃，
+#     该服务会把 RF 永久锁 offline 导致无法注册）。
+#     内核 IPA 修复在 patchs/raphael.patch；00161 固件在 firmware-xiaomi-raphael.deb。
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b] 📡 配置基带 modem 服务 + 崩溃隔离"
 
 install -d rootdir/usr/local/sbin
 install -d rootdir/etc/systemd/system/ModemManager.service.d
 install -d rootdir/etc/udev/rules.d
-
-# ---------------------------------------------------------------------------
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b]   └─ raphael-modem-offline.sh"
-cat > rootdir/usr/local/sbin/raphael-modem-offline.sh << 'EOF'
-#!/bin/sh
-# Keep modem RF off at boot until ModemManager is intentionally enabled.
-set -eu
-
-QRTR_DEV=qrtr://0
-MAX_WAIT=120
-
-wait_modem() {
-	for rp in /sys/class/remoteproc/remoteproc*; do
-		[ -f "$rp/name" ] || continue
-		if [ "$(cat "$rp/name")" = modem ]; then
-			i=0
-			while [ "$i" -lt "$MAX_WAIT" ]; do
-				state=$(cat "$rp/state" 2>/dev/null || echo unknown)
-				case "$state" in
-				running) return 0 ;;
-				crashed|offline|unknown)
-					echo "raphael-modem-offline: modem state=$state" >&2
-					return 1
-					;;
-				esac
-				i=$((i + 1))
-				sleep 1
-			done
-			echo "raphael-modem-offline: modem not running" >&2
-			return 1
-		fi
-	done
-	echo "raphael-modem-offline: modem remoteproc not found" >&2
-	return 1
-}
-
-wait_qmi() {
-	i=0
-	while [ "$i" -lt "$MAX_WAIT" ]; do
-		if qmicli -p -d "$QRTR_DEV" --dms-get-ids >/dev/null 2>&1; then
-			return 0
-		fi
-		i=$((i + 1))
-		sleep 1
-	done
-	return 1
-}
-
-set_offline() {
-	MODE=$(	qmicli -p -d "$QRTR_DEV" --dms-get-operating-mode 2>/dev/null \
-		| awk -F"'" '/Mode:/{print $2}')
-	case "$MODE" in
-	offline)
-		echo "raphael-modem-offline: already offline"
-		;;
-	online|shutting-down|low-power|resetting)
-		qmicli -p -d "$QRTR_DEV" --dms-set-operating-mode=offline
-		echo "raphael-modem-offline: set offline (was $MODE)"
-		;;
-	*)
-		qmicli -p -d "$QRTR_DEV" --dms-set-operating-mode=offline || true
-		echo "raphael-modem-offline: forced offline (was ${MODE:-unknown})"
-		;;
-	esac
-}
-
-wait_modem || exit 1
-wait_qmi || exit 1
-set_offline
-
-# Modem firmware may flip back to online briefly after boot.
-i=0
-while [ "$i" -lt 10 ]; do
-	MODE=$(qmicli -p -d "$QRTR_DEV" --dms-get-operating-mode 2>/dev/null \
-		| awk -F"'" '/Mode:/{print $2}')
-	[ "$MODE" = offline ] && exit 0
-	set_offline
-	i=$((i + 1))
-	sleep 1
-done
-
-exit 0
-EOF
-chmod 755 rootdir/usr/local/sbin/raphael-modem-offline.sh
 
 # ---------------------------------------------------------------------------
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b]   └─ raphael-sim-init.sh"
@@ -222,7 +134,7 @@ chmod 755 rootdir/usr/local/sbin/raphael-sim-init.sh
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b]   └─ raphael-no-mobile-data.sh"
 cat > rootdir/usr/local/sbin/raphael-no-mobile-data.sh << 'EOF'
 #!/bin/sh
-# Keep cellular data disconnected at boot (IPA data plane still crashes).
+# Keep cellular data disconnected at boot (user must manually connect).
 set -eu
 
 sleep 2
@@ -239,22 +151,6 @@ chmod 755 rootdir/usr/local/sbin/raphael-no-mobile-data.sh
 
 # ---------------------------------------------------------------------------
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b]   └─ systemd units"
-cat > rootdir/etc/systemd/system/raphael-modem-offline.service << 'EOF'
-[Unit]
-Description=Raphael force modem offline before ModemManager RF
-After=remoteproc.target
-Before=raphael-sim-init.service ModemManager.service
-Wants=remoteproc.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/sbin/raphael-modem-offline.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 cat > rootdir/etc/systemd/system/raphael-sim-init.service << 'EOF'
 [Unit]
 Description=Raphael SIM slot 1 power-on via QMI
@@ -277,7 +173,7 @@ EOF
 
 cat > rootdir/etc/systemd/system/raphael-no-mobile-data.service << 'EOF'
 [Unit]
-Description=Raphael disable GSM autoconnect (IPA data plane unsafe)
+Description=Raphael disable GSM autoconnect at boot
 After=NetworkManager.service ModemManager.service
 Before=network-online.target
 
@@ -292,8 +188,7 @@ EOF
 
 cat > rootdir/etc/systemd/system/ModemManager.service.d/raphael.conf << 'EOF'
 [Unit]
-After=raphael-modem-offline.service raphael-sim-init.service
-Requires=raphael-modem-offline.service
+After=raphael-sim-init.service
 EOF
 
 # ---------------------------------------------------------------------------
@@ -308,8 +203,6 @@ SUBSYSTEM=="remoteproc", ACTION=="add", ATTR{name}=="modem", ATTR{recovery}="dis
 EOF
 
 # ---------------------------------------------------------------------------
-# enable: sim-init + no-mobile-data；modem-offline 不单独 enable，由 MM drop-in
-# 的 Requires= 在启动 ModemManager 时拉起（与 raphael-deploy-modem-services.sh 一致）。
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [10b]   └─ 启用服务"
 chroot rootdir systemctl enable raphael-sim-init.service
 chroot rootdir systemctl enable raphael-no-mobile-data.service
