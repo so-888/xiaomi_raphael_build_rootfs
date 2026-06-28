@@ -204,10 +204,17 @@ fi
 # ================================================================
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 配置 PipeWire 作为音频服务"
 
-# 确保 PipeWire 全套及兼容层安装齐全（不卸载任何东西）
-chroot rootdir apt-get install -y --no-install-recommends \
-    pipewire pipewire-pulse pipewire-audio pipewire-alsa wireplumber \
-    2>/dev/null || true
+# 确保 PipeWire 全套及兼容层安装齐全（不卸载任何东西）。
+# pipewire-audio 是必须的：它拉入正确的音频后端/编解码与默认配置，缺它声音不对。
+# 不加 --no-install-recommends，避免漏装其依赖；并在装完后强校验，缺失即让构建失败。
+chroot rootdir apt-get install -y \
+    pipewire pipewire-pulse pipewire-audio pipewire-alsa wireplumber
+
+if ! chroot rootdir dpkg -s pipewire-audio >/dev/null 2>&1; then
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ pipewire-audio 未安装成功，声音会不正常，终止构建"
+    exit 1
+fi
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ pipewire-audio 已安装 ✅"
 
 # 解除任何历史遗留的屏蔽，并启用 PipeWire 用户服务
 chroot rootdir systemctl --global unmask \
