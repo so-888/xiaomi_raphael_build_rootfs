@@ -137,7 +137,7 @@ ping -4 -c 3 www.baidu.com
 - 默认配置**清华软件源**，预装简体中文语言包与中国标准时区，开箱汉化
 - 内置 SSH 服务，支持 root / 普通用户远程登录；支持 USB NCM 网络共享
 - **蜂窝基带开箱可用**：匹配 modem 固件（00161）+ 内核 IPA 数据面修复 + SIM 开机自动初始化 + QRTR 版 ModemManager（QMAPv4）
-- 音频统一使用 **PipeWire**（含 `pipewire-audio`，保证音频正常）
+- 音频：预装 **`alsa-xiaomi-raphael`**（K20 专属 UCM 声卡路由，出声正常的关键）；低版本（jammy 等）默认 **PulseAudio**，高版本（noble 等）使用 **PipeWire + soft-mixer 修复**（解决扬声器音量极小问题）
 - 桌面版提供 GNOME / Phosh 双环境；服务器版开机 15 秒自动熄屏，自定义快捷命令 `leijun`（关屏）/ `jinfan`（点亮）
 
 ---
@@ -200,7 +200,7 @@ sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/
 - **分卷必须先合并再刷**：`*.partXX` 要下齐、合并成完整 `.zip` 并核对 SHA256 后才能刷入。
 - **刷机有风险**：会擦除 `userdata` 等分区，请提前备份重要数据；务必确认 Bootloader 已解锁。
 - **移动数据默认不自动连接**：需手动 `nmcli connection up <连接名>`，详见 2.5。
-- **音频依赖 PipeWire**：镜像强制安装 `pipewire-audio`，请勿手动卸载 PipeWire 组件（`pipewire-pulse`/`pipewire-audio` 是桌面硬依赖，purge 会级联卸载整个 GNOME 桌面导致黑屏）。
+- **音频依赖 `alsa-xiaomi-raphael` + 正确的音频服务**：UCM 配置决定声卡路由；扬声器 TFA9874 无硬件音量控件，高版本 PipeWire 默认会导致音量极小，镜像已按发行版自动选择 PulseAudio（jammy）或 PipeWire soft-mixer 修复（noble）。**切勿 purge PipeWire 包**（会级联卸载 GNOME 桌面），也**切勿 autoremove**。
 - **Windows 连不上设备 CDC NCM**：参考解决方案视频 [BV1tW4y1A79V](https://www.bilibili.com/video/BV1tW4y1A79V/)。
 - 基带固化细节见 `基带测试/RAPHAEL-MODEM-STATUS.md`。
 
@@ -211,6 +211,7 @@ sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/
 - **GNOME 桌面电源键无法息屏**：后续版本持续修复。
 - **大体积镜像不直接发 Release**：部分 `ubuntu-gnome` 镜像超过 2GB，会被拆分为分卷，或仅保留在 Actions Artifacts。
 - **移动数据 ping 域名失败（旧镜像）**：旧镜像 DNS 跟随运营商下发可能不可达；新镜像已固定公共 DNS。旧镜像可手动把 `nameserver 223.5.5.5` / `nameserver 114.114.114.114` 写入 `/etc/resolv.conf`。
+- **扬声器音量极小（旧 noble 镜像）**：TFA9874 扬声器无 ALSA 硬件音量控件，PipeWire 默认走 HW mixer 路径会几乎无声。新镜像已注入 WirePlumber `api.alsa.soft-mixer = true` 修复；旧镜像可手动创建 `/etc/wireplumber/wireplumber.conf.d/50-raphael-soft-mixer.conf` 并 `systemctl --user restart wireplumber`。
 - **RF/modem 稳定性**：当前以"崩溃隔离"为安全网（modem 崩溃不拖垮整机），根因层面的 RF 稳定性仍在跟进。
 
 ---

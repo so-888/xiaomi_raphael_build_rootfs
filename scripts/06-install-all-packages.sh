@@ -187,41 +187,110 @@ EOF
     fi
 fi
 
+# K20 专属 ALSA UCM 声卡路由配置：设备声音正常的关键（依赖 alsa-ucm-conf）。
+# 用 apt-get install ./deb 安装以自动解析依赖（dpkg -i 不解析依赖会留下未配置状态）。
+# 桌面镜像若提供了该 deb 却装不上，直接终止构建——否则出来的镜像声音异常。
 if [ -f "alsa-xiaomi-raphael.deb" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 ALSA 配置"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 ALSA 配置 (alsa-xiaomi-raphael)"
     cp alsa-xiaomi-raphael.deb rootdir/tmp/
-    chroot rootdir dpkg -i /tmp/alsa-xiaomi-raphael.deb
+    chroot rootdir apt-get install -y /tmp/alsa-xiaomi-raphael.deb \
+        || chroot rootdir sh -c 'dpkg -i /tmp/alsa-xiaomi-raphael.deb; apt-get install -fy'
     rm rootdir/tmp/alsa-xiaomi-raphael.deb
-fi
 
-# ================================================================
-# 音频：统一使用 PipeWire（Ubuntu 24.04 Noble 的默认音频栈）
-# ----------------------------------------------------------------
-# 切勿用 PulseAudio 去“替换” PipeWire！pipewire-pulse / pipewire-audio
-# 是 ubuntu-desktop / gnome-shell / gdm3 的硬依赖，purge 它们再 autoremove
-# 会级联卸载整个 GNOME 桌面，导致开机黑屏（实测踩过坑）。
-# PipeWire 自带 pipewire-pulse 提供 PulseAudio 兼容层，应用无需改动。
-# ================================================================
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 配置 PipeWire 作为音频服务"
-
-# 确保 PipeWire 全套及兼容层安装齐全（不卸载任何东西）。
-# pipewire-audio 是必须的：它拉入正确的音频后端/编解码与默认配置，缺它声音不对。
-# 不加 --no-install-recommends，避免漏装其依赖；并在装完后强校验，缺失即让构建失败。
-chroot rootdir apt-get install -y \
-    pipewire pipewire-pulse pipewire-audio pipewire-alsa wireplumber
-
-if ! chroot rootdir dpkg -s pipewire-audio >/dev/null 2>&1; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ pipewire-audio 未安装成功，声音会不正常，终止构建"
+    if ! chroot rootdir dpkg -s alsa-xiaomi-raphael >/dev/null 2>&1; then
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ alsa-xiaomi-raphael 未安装成功，设备声音会异常，终止构建"
+        exit 1
+    fi
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ alsa-xiaomi-raphael 已安装 ✅"
+elif [[ "$SYSTEM_TYPE" == *"phosh"* || "$SYSTEM_TYPE" == *"gnome"* ]]; then
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ 桌面镜像缺少 alsa-xiaomi-raphael.deb，设备声音会异常，终止构建"
     exit 1
 fi
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ pipewire-audio 已安装 ✅"
 
-# 解除任何历史遗留的屏蔽，并启用 PipeWire 用户服务
-chroot rootdir systemctl --global unmask \
-    pipewire.socket pipewire-pulse.socket pipewire.service \
-    pipewire-pulse.service wireplumber.service 2>/dev/null || true
-chroot rootdir systemctl --global enable \
-    pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null || true
+# ================================================================
+# 音频：Raphael 设备专用策略（配合 alsa-xiaomi-raphael UCM）
+# ----------------------------------------------------------------
+# 扬声器 TFA9874 在 UCM 中没有硬件音量控件，PipeWire 默认走 HW mixer
+# 路径会导致音量极小/几乎无声；PulseAudio 走软件音量则正常。
+#
+# - 低版本（jammy 等仍提供 pulseaudio 包）：用 PulseAudio 作音频服务。
+#   只 mask PipeWire 用户服务，绝不 purge 包（purge 会级联卸载 GNOME 桌面）。
+# - 高版本（noble 等无独立 pulseaudio 包）：保留 PipeWire，注入 WirePlumber
+#   soft-mixer 配置，强制软件音量 + 默认 100%。
+# ================================================================
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 配置音频服务 (Raphael 适配)"
+
+_use_pulseaudio=false
+if chroot rootdir apt-cache show pulseaudio >/dev/null 2>&1; then
+    _use_pulseaudio=true
+fi
+
+if [ "$_use_pulseaudio" = true ]; then
+    # ── 路径 A：PulseAudio（jammy / bookworm 等）────────────────────────
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 使用 PulseAudio（本发行版可用，避免 PipeWire 音量异常）"
+    chroot rootdir apt-get install -y pulseaudio pulseaudio-utils
+
+    # 屏蔽 PipeWire 用户服务（保留包以满足桌面依赖，但不自启）
+    for unit in pipewire.socket pipewire-pulse.socket pipewire.service \
+                pipewire-pulse.service wireplumber.service \
+                pipewire-media-session.service; do
+        chroot rootdir systemctl --global mask "$unit" 2>/dev/null || true
+    done
+    chroot rootdir systemctl --global unmask pulseaudio.service pulseaudio.socket 2>/dev/null || true
+    chroot rootdir systemctl --global enable pulseaudio.service pulseaudio.socket 2>/dev/null || true
+
+else
+    # ── 路径 B：PipeWire + soft-mixer 修复（noble / resolute 等）────────
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 使用 PipeWire + soft-mixer 修复（本发行版无独立 pulseaudio）"
+
+    PW_CANDIDATES="pipewire pipewire-pulse pipewire-audio pipewire-alsa \
+        pipewire-audio-client-libraries libspa-0.2-bluetooth wireplumber"
+    PW_INSTALL=""
+    for p in $PW_CANDIDATES; do
+        if chroot rootdir apt-cache show "$p" >/dev/null 2>&1; then
+            PW_INSTALL="$PW_INSTALL $p"
+        fi
+    done
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 PipeWire 包:$PW_INSTALL"
+    chroot rootdir apt-get install -y $PW_INSTALL
+
+    # TFA9874 扬声器无 HW 音量控件 → 强制软件混音 + 输出节点默认 100% 音量
+    install -d rootdir/etc/wireplumber/wireplumber.conf.d
+    cat > rootdir/etc/wireplumber/wireplumber.conf.d/50-raphael-soft-mixer.conf << 'EOF'
+# Raphael (TFA9874): speaker has no ALSA HW volume control in UCM.
+# PipeWire defaults to HW mixer path → near-silent output.
+# Force software volume and set default output to 100%.
+monitor.alsa.rules = [
+  {
+    matches = [ { device.name = "~alsa_card.*" } ]
+    actions = {
+      update-props = {
+        api.alsa.soft-mixer = true
+        api.alsa.use-ucm = true
+      }
+    }
+  }
+]
+monitor.rules = [
+  {
+    matches = [ { node.name = "~alsa_output.*" } ]
+    actions = {
+      update-props = {
+        volume = 1.0
+      }
+    }
+  }
+]
+EOF
+
+    chroot rootdir systemctl --global unmask \
+        pipewire.socket pipewire-pulse.socket pipewire.service \
+        pipewire-pulse.service wireplumber.service 2>/dev/null || true
+    chroot rootdir systemctl --global enable \
+        pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null || true
+fi
+
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 音频配置完成 ✅"
 
 if [[ "$SYSTEM_TYPE" != *"server"* ]]; then
     if [[ "$DESKTOP_ENV" == phosh* ]]; then
