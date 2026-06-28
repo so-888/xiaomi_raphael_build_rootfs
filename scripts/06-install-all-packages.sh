@@ -185,65 +185,97 @@ EOF
 		chroot rootdir systemctl mask brltty.service
         #chroot rootdir gsettings set org.gnome.mutter auto-rotate-screen true || true
 
-        # Ubuntu 的 apt firefox 是 snap 过渡包，chroot 构建无 snapd → 无图标/无任务栏。
-        # 改用 firefox-esr 原生 deb，并写入 dock 收藏与桌面快捷方式。
+        # Ubuntu 的 apt firefox 只是指向 snap 的过渡空壳，chroot 构建无 snapd
+        # → 无图标/无任务栏。按 Mozilla 官方文档改用 packages.mozilla.org 提供的
+        # 原生 deb（amd64/arm64），并用 apt pin 强制优先、把 Ubuntu 的 snap 壳降权。
+        # 参考: https://support.mozilla.org/zh-CN/kb/install-firefox-linux
         if [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 Firefox (firefox-esr deb, 非 snap)"
-            chroot rootdir apt-get remove -y firefox 2>/dev/null || true
-            chroot rootdir apt-get install -y firefox-esr
+            FIREFOX_ARCH="$(chroot rootdir dpkg --print-architecture)"
+            # Mozilla 官方源仅发布 amd64/arm64 的 firefox deb
+            if [[ "$FIREFOX_ARCH" != "amd64" && "$FIREFOX_ARCH" != "arm64" ]]; then
+                echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ⚠️ Mozilla 官方源无 ${FIREFOX_ARCH} 的 firefox deb，跳过 Firefox 安装"
+            else
+                echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 Firefox (Mozilla 官方 deb, 非 snap)"
 
-            if ! chroot rootdir dpkg -s firefox-esr >/dev/null 2>&1; then
-                echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ firefox-esr 未安装成功，终止构建"
-                exit 1
-            fi
+                # 1) 导入 Mozilla APT 仓库签名密钥
+                echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 配置 Mozilla 官方 APT 源 (packages.mozilla.org)"
+                install -d -m 0755 rootdir/etc/apt/keyrings
+                curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg \
+                    -o rootdir/etc/apt/keyrings/packages.mozilla.org.asc
+                if [ ! -s rootdir/etc/apt/keyrings/packages.mozilla.org.asc ]; then
+                    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ Mozilla 签名密钥获取失败，终止构建"
+                    exit 1
+                fi
+                chmod 0644 rootdir/etc/apt/keyrings/packages.mozilla.org.asc
 
-            # 修正 .desktop：确保显示在应用菜单/任务栏，WMClass 与 ubuntu-dock 匹配
-            install -d rootdir/etc/skel/Desktop
-            cat > rootdir/usr/share/applications/firefox-esr-custom.desktop << 'EOF'
-[Desktop Entry]
-Version=1.0
-Name=Firefox
-Comment=Browse the Web
-GenericName=Web Browser
-Keywords=Internet;WWW;Browser;Web;Explorer
-Exec=firefox-esr %u
-Terminal=false
-X-MultipleArgs=false
-Type=Application
-Icon=firefox-esr
-Categories=GNOME;GTK;Network;WebBrowser;
-MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;image/gif;image/jpeg;image/png;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/geo;x-scheme-handler/mailto;
-StartupNotify=true
-StartupWMClass=Firefox-esr
-Actions=new-window;new-private-window;
+                # 2) 校验密钥指纹，防止源被篡改/中间人
+                MOZ_FPR_EXPECT="35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3"
+                MOZ_GPGHOME="$(mktemp -d)"
+                MOZ_FPR_GOT="$(GNUPGHOME="$MOZ_GPGHOME" gpg -n -q --import --import-options import-show \
+                    rootdir/etc/apt/keyrings/packages.mozilla.org.asc 2>/dev/null \
+                    | grep -ioE "[0-9A-F]{40}" | head -1)"
+                rm -rf "$MOZ_GPGHOME"
+                if [ "$MOZ_FPR_GOT" != "$MOZ_FPR_EXPECT" ]; then
+                    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ Mozilla 密钥指纹不匹配 (得到: ${MOZ_FPR_GOT:-空})，终止构建"
+                    exit 1
+                fi
 
-[Desktop Action new-window]
-Name=Open a New Window
-Exec=firefox-esr -new-window
-
-[Desktop Action new-private-window]
-Name=Open a New Private Window
-Exec=firefox-esr -private-window
+                # 3) DEB822 源（suite 固定为 mozilla，不依赖发行代号，jammy~resolute 通用）
+                cat > rootdir/etc/apt/sources.list.d/mozilla.sources << EOF
+Types: deb
+URIs: https://packages.mozilla.org/apt
+Suites: mozilla
+Components: main
+Architectures: ${FIREFOX_ARCH}
+Signed-By: /etc/apt/keyrings/packages.mozilla.org.asc
 EOF
-            cp rootdir/usr/share/applications/firefox-esr-custom.desktop \
-               rootdir/etc/skel/Desktop/firefox-esr-custom.desktop
-            chmod 755 rootdir/etc/skel/Desktop/firefox-esr-custom.desktop
 
-            # 写入 ubuntu-dock 默认收藏（含 Firefox），首次登录即固定到任务栏
-            install -d rootdir/etc/dconf/db/local.d rootdir/etc/dconf/profile
-            cat > rootdir/etc/dconf/db/local.d/01-firefox-favorite << 'EOF'
+                # 4) 优先 Mozilla 源，并把 Ubuntu 的 snap 过渡 firefox 降权（避免被换回壳）
+                cat > rootdir/etc/apt/preferences.d/mozilla << 'EOF'
+Package: *
+Pin: origin packages.mozilla.org
+Pin-Priority: 1000
+
+Package: firefox*
+Pin: release o=Ubuntu
+Pin-Priority: -1
+EOF
+
+                chroot rootdir apt-get update
+                chroot rootdir apt-get remove -y firefox 2>/dev/null || true
+                chroot rootdir apt-get install -y firefox
+
+                if ! chroot rootdir dpkg -s firefox >/dev/null 2>&1; then
+                    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ firefox 未安装成功，终止构建"
+                    exit 1
+                fi
+
+                # Mozilla 的 firefox deb 自带 /usr/share/applications/firefox.desktop
+                # (Exec=firefox, Icon=firefox, StartupWMClass=firefox)，无需自定义。
+                # 复制到 skel/Desktop 作为桌面图标。
+                install -d rootdir/etc/skel/Desktop
+                if [ -f rootdir/usr/share/applications/firefox.desktop ]; then
+                    cp rootdir/usr/share/applications/firefox.desktop \
+                       rootdir/etc/skel/Desktop/firefox.desktop
+                    chmod 755 rootdir/etc/skel/Desktop/firefox.desktop
+                fi
+
+                # 写入 ubuntu-dock 默认收藏（含 Firefox），首次登录即固定到任务栏
+                install -d rootdir/etc/dconf/db/local.d rootdir/etc/dconf/profile
+                cat > rootdir/etc/dconf/db/local.d/01-firefox-favorite << 'EOF'
 [org/gnome/shell]
-favorite-apps=['firefox-esr-custom.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Software.desktop', 'org.gnome.TextEditor.desktop', 'org.gnome.Calculator.desktop', 'org.gnome.Terminal.desktop', 'gnome-control-center.desktop']
+favorite-apps=['firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Software.desktop', 'org.gnome.TextEditor.desktop', 'org.gnome.Calculator.desktop', 'org.gnome.Terminal.desktop', 'gnome-control-center.desktop']
 
 [org/gnome/desktop/default-applications/web]
-browser='firefox-esr.desktop'
+browser='firefox.desktop'
 EOF
-            cat > rootdir/etc/dconf/profile/user << 'EOF'
+                cat > rootdir/etc/dconf/profile/user << 'EOF'
 user-db:user
 system-db:local
 EOF
-            chroot rootdir dconf update 2>/dev/null || true
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ Firefox (firefox-esr) 已配置 ✅"
+                chroot rootdir dconf update 2>/dev/null || true
+                echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ Firefox (Mozilla 官方 deb) 已配置 ✅"
+            fi
         fi
     fi
 fi
