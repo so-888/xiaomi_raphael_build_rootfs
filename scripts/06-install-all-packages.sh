@@ -28,7 +28,7 @@ elif [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
 	if [[ "$SYSTEM_TYPE" == *"server"* ]]; then
 		BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager net-tools initramfs-tools chrony curl wget locales tzdata dnsmasq iptables iproute2 zram-tools udev dbus kmod ca-certificates wireless-regdb"
 	else
-		BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager firefox net-tools grub-efi-arm64-signed initramfs-tools chrony curl wget locales tzdata dnsmasq iptables iproute2 zram-tools udev dbus kmod ca-certificates wireless-regdb"
+		BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager net-tools grub-efi-arm64-signed initramfs-tools chrony curl wget locales tzdata dnsmasq iptables iproute2 zram-tools udev dbus kmod ca-certificates wireless-regdb"
 	fi
 fi
 
@@ -184,6 +184,67 @@ EOF
 		chroot rootdir systemctl disable brltty.service
 		chroot rootdir systemctl mask brltty.service
         #chroot rootdir gsettings set org.gnome.mutter auto-rotate-screen true || true
+
+        # Ubuntu 的 apt firefox 是 snap 过渡包，chroot 构建无 snapd → 无图标/无任务栏。
+        # 改用 firefox-esr 原生 deb，并写入 dock 收藏与桌面快捷方式。
+        if [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 Firefox (firefox-esr deb, 非 snap)"
+            chroot rootdir apt-get remove -y firefox 2>/dev/null || true
+            chroot rootdir apt-get install -y firefox-esr
+
+            if ! chroot rootdir dpkg -s firefox-esr >/dev/null 2>&1; then
+                echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ firefox-esr 未安装成功，终止构建"
+                exit 1
+            fi
+
+            # 修正 .desktop：确保显示在应用菜单/任务栏，WMClass 与 ubuntu-dock 匹配
+            install -d rootdir/etc/skel/Desktop
+            cat > rootdir/usr/share/applications/firefox-esr-custom.desktop << 'EOF'
+[Desktop Entry]
+Version=1.0
+Name=Firefox
+Comment=Browse the Web
+GenericName=Web Browser
+Keywords=Internet;WWW;Browser;Web;Explorer
+Exec=firefox-esr %u
+Terminal=false
+X-MultipleArgs=false
+Type=Application
+Icon=firefox-esr
+Categories=GNOME;GTK;Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;image/gif;image/jpeg;image/png;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/geo;x-scheme-handler/mailto;
+StartupNotify=true
+StartupWMClass=Firefox-esr
+Actions=new-window;new-private-window;
+
+[Desktop Action new-window]
+Name=Open a New Window
+Exec=firefox-esr -new-window
+
+[Desktop Action new-private-window]
+Name=Open a New Private Window
+Exec=firefox-esr -private-window
+EOF
+            cp rootdir/usr/share/applications/firefox-esr-custom.desktop \
+               rootdir/etc/skel/Desktop/firefox-esr-custom.desktop
+            chmod 755 rootdir/etc/skel/Desktop/firefox-esr-custom.desktop
+
+            # 写入 ubuntu-dock 默认收藏（含 Firefox），首次登录即固定到任务栏
+            install -d rootdir/etc/dconf/db/local.d rootdir/etc/dconf/profile
+            cat > rootdir/etc/dconf/db/local.d/01-firefox-favorite << 'EOF'
+[org/gnome/shell]
+favorite-apps=['firefox-esr-custom.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Software.desktop', 'org.gnome.TextEditor.desktop', 'org.gnome.Calculator.desktop', 'org.gnome.Terminal.desktop', 'gnome-control-center.desktop']
+
+[org/gnome/desktop/default-applications/web]
+browser='firefox-esr.desktop'
+EOF
+            cat > rootdir/etc/dconf/profile/user << 'EOF'
+user-db:user
+system-db:local
+EOF
+            chroot rootdir dconf update 2>/dev/null || true
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ Firefox (firefox-esr) 已配置 ✅"
+        fi
     fi
 fi
 
