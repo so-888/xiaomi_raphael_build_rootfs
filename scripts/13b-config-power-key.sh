@@ -22,6 +22,25 @@ PowerKeyIgnoreInhibited=yes
 EOF
 
 install -d rootdir/usr/local/sbin
+cat > rootdir/usr/local/sbin/wait-for-raphael-session.sh << 'EOF'
+#!/bin/sh
+# 等待 autologin 用户 GNOME 会话就绪后再启动电源键服务
+USER="${RAPHAEL_AUTOLOGIN_USER:-user}"
+RUN_UID=$(id -u "$USER" 2>/dev/null) || exit 1
+RUN="/run/user/$RUN_UID"
+for i in $(seq 1 120); do
+	if [ -S "$RUN/bus" ] && pgrep -u "$USER" -x gnome-shell >/dev/null 2>&1; then
+		# gnome-shell 初始化输入后我们再 grab
+		sleep 3
+		exit 0
+	fi
+	sleep 1
+done
+echo "wait-for-raphael-session: timeout waiting for $USER session" >&2
+exit 1
+EOF
+chmod 755 rootdir/usr/local/sbin/wait-for-raphael-session.sh
+
 cat > rootdir/usr/local/sbin/raphael-power-key.py << 'EOF'
 #!/usr/bin/env python3
 """Raphael 电源键：短按切换屏幕，长按 3s 弹出 GNOME 原生关机菜单"""
@@ -175,25 +194,65 @@ def show_shutdown_dialog():
         run_as_user(["gnome-session-quit", "--power-off"])
 
 
+def session_ready():
+    uid = pwd.getpwnam(AUTO_USER).pw_uid
+    runtime = Path(f"/run/user/{uid}")
+    bus = runtime / "bus"
+    if not bus.exists():
+        return False
+    try:
+        subprocess.run(
+            ["pgrep", "-u", AUTO_USER, "-x", "gnome-shell"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def wait_for_session(timeout=120):
+    log.info("waiting for %s GNOME session", AUTO_USER)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if session_ready():
+            time.sleep(3)
+            log.info("session ready")
+            return True
+        time.sleep(1)
+    log.error("session not ready after %ss", timeout)
+    return False
+
+
 def grab_device(fd):
     EVIOCGRAB = 0x40044590
     try:
         fcntl.ioctl(fd, EVIOCGRAB, 1)
-        log.info("grabbed input device")
+        return True
     except OSError as exc:
         log.warning("EVIOCGRAB failed: %s", exc)
+        return False
 
 
 def main():
+    if not wait_for_session():
+        sys.exit(1)
+
     dev = find_power_input()
     fd = os.open(str(dev), os.O_RDONLY | os.O_NONBLOCK)
-    grab_device(fd)
+    grabbed = grab_device(fd)
+    if grabbed:
+        log.info("grabbed input device")
+    else:
+        log.warning("initial grab failed, will retry")
     log.info("listening on %s", dev)
 
     press_time = None
     long_fired = False
     long_timer = None
     is_pressed = False
+    last_grab_try = time.monotonic()
 
     def cancel_long_timer():
         nonlocal long_timer
@@ -209,7 +268,13 @@ def main():
         show_shutdown_dialog()
 
     while True:
-        r, _, _ = select.select([fd], [], [], 0.5)
+        r, _, _ = select.select([fd], [], [], 1.0)
+        now = time.monotonic()
+        if not grabbed and now - last_grab_try >= 5:
+            last_grab_try = now
+            if grab_device(fd):
+                grabbed = True
+                log.info("grabbed input device (retry)")
         if not r:
             continue
         data = os.read(fd, EVENT_SIZE)
@@ -253,9 +318,10 @@ Wants=gdm.service
 
 [Service]
 Type=simple
+ExecStartPre=/usr/local/sbin/wait-for-raphael-session.sh
 ExecStart=/usr/bin/python3 /usr/local/sbin/raphael-power-key.py
 Restart=on-failure
-RestartSec=2
+RestartSec=5
 TimeoutStopSec=5
 KillMode=mixed
 
@@ -263,7 +329,31 @@ KillMode=mixed
 WantedBy=multi-user.target
 EOF
 
+# 开机后延迟重启一次，避免 gnome-shell 抢占输入设备
+cat > rootdir/etc/systemd/system/raphael-power-key-restart.service << 'EOF'
+[Unit]
+Description=Restart Raphael power key handler after desktop is up
+After=gdm.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart raphael-power-key.service
+EOF
+
+cat > rootdir/etc/systemd/system/raphael-power-key-restart.timer << 'EOF'
+[Unit]
+Description=Delayed restart of Raphael power key handler
+
+[Timer]
+OnBootSec=45s
+Unit=raphael-power-key-restart.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
 chroot rootdir systemctl enable raphael-power-key.service
+chroot rootdir systemctl enable raphael-power-key-restart.timer
 chroot rootdir usermod -aG input user 2>/dev/null || true
 
 # GNOME：禁用自带电源键处理，交给 raphael-power-key
